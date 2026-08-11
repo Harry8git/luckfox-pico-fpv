@@ -16,6 +16,9 @@ include $(MAKEFILE_DIR)/Makefile.param
 
 app_src := $(wildcard ./*/Makefile ./component/fastboot_server/Makefile)
 app_src := $(dir $(app_src))
+ifeq ($(RK_ENABLE_WIFI),n)
+app_src := $(filter-out ./wifi_app/, $(app_src))
+endif
 
 all: $(pkg-build)
 	$(foreach target,$(app_src),make -C $(target)||exit -1;)

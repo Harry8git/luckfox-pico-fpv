@@ -1,20 +1,20 @@
 #!/bin/sh
 #
 # setup configfs for adbd, usb mass storage and MTP....
-# For kernel v4.4 usb configfs
+# For kernel v4.4 / v5.10 usb configfs
 #
-# Load default env variables from profiles
 . /etc/profile
 
 UMS_EN=off
 ADB_EN=on
 MTP_EN=off
 NTB_EN=off
-ACM_EN=off
+ACM_EN=on       # ENABLED: CDC-ACM (Dual Serial Ports: /dev/ttyGS6 for Video, /dev/ttyGS7 for Control)
+NCM_EN=on       # ENABLED: CDC-NCM (Native USB Ethernet for macOS)
 UAC1_EN=off
 UAC2_EN=off
 UVC_EN=off
-RNDIS_EN=on
+RNDIS_EN=off    # DISABLED: Replaced by NCM for Mac compatibility
 HID_EN=off
 
 USB_ATTRIBUTE=0x409
@@ -27,8 +27,6 @@ USB_STRINGS_DIR=${USB_CONFIGFS_DIR}/strings/${USB_ATTRIBUTE}
 USB_FUNCTIONS_DIR=${USB_CONFIGFS_DIR}/functions
 USB_CONFIGS_DIR=${USB_CONFIGFS_DIR}/configs/${USB_SKELETON}
 
-# For VBUS_ALWAYS_ON usb otg is not support ums
-# Since the block to ums is always occupated by USB due to no disconneted state
 UMS_BLOCK=/userdata/ums_shared.img
 UMS_BLOCK_SIZE=0	#unit M
 UMS_BLOCK_TYPE=fat
@@ -59,8 +57,9 @@ function_init()
 	mkdir ${USB_FUNCTIONS_DIR}/ffs.ntb
 	mkdir ${USB_FUNCTIONS_DIR}/mtp.gs0
 	mkdir ${USB_FUNCTIONS_DIR}/rndis.gs0
-	#write /config/usb_gadget/g1/functions/rndis.gs0/wceis 1
-	mkdir ${USB_FUNCTIONS_DIR}/acm.gs6
+	mkdir ${USB_FUNCTIONS_DIR}/ncm.gs0       # CDC-NCM Ethernet Node
+	mkdir ${USB_FUNCTIONS_DIR}/acm.gs6       # CDC-ACM Port 1: /dev/ttyGS6 (H.265 Video)
+	mkdir ${USB_FUNCTIONS_DIR}/acm.gs7       # CDC-ACM Port 2: /dev/ttyGS7 (Control/Telemetry)
 	mkdir ${USB_FUNCTIONS_DIR}/mass_storage.0
 	mkdir ${USB_FUNCTIONS_DIR}/uvc.gs6
 	mkdir ${USB_FUNCTIONS_DIR}/hid.usb0
@@ -83,7 +82,7 @@ configfs_init()
 	fi
 	echo $SERIAL > ${USB_STRINGS_DIR}/serialnumber
 	echo "rockchip"  > ${USB_STRINGS_DIR}/manufacturer
-	echo "rk3xxx"  > ${USB_STRINGS_DIR}/product
+	echo "Luckfox Pico Composite"  > ${USB_STRINGS_DIR}/product
 
 	function_init
 
@@ -108,7 +107,6 @@ make_config_string()
 
 parse_parameter()
 {
-	# find name and var
 	NAME=`echo $1 | awk -F "=" '{print $1}'`
 	VAR=`echo $1 | awk -F "=" '{print $2}'`
 
@@ -141,77 +139,62 @@ parse_parameter()
 
 parameter_init()
 {
-	while read line
-	do
-		case "$line" in
-			usb_mtp_en)
-				MTP_EN=on
-				make_config_string mtp
-				;;
-			usb_adb_en)
-				ADB_EN=on
-				make_config_string adb
-				;;
-			usb_ums_en)
-				UMS_EN=on
-				make_config_string ums
-				;;
-			usb_ntb_en)
-				NTB_EN=on
-				make_config_string ntb
-				;;
-			usb_acm_en)
-				ACM_EN=on
-				make_config_string acm
-				;;
-			usb_uac1_en)
-				UAC1_EN=on
-				make_config_string uac1
-				;;
-			usb_uac2_en)
-				UAC2_EN=on
-				make_config_string uac2
-				;;
-			usb_uvc_en)
-				UVC_EN=on
-				make_config_string uvc
-				;;
-			usb_rndis_en)
-				RNDIS_EN=on
-				make_config_string rndis
-				;;
-			usb_hid_en)
-				HID_EN=on
-				make_config_string hid
-				;;
-			*)
-				parse_parameter ${line}
-				;;
-		esac
-	done < $USB_CONFIG_FILE
+	if [ -f "$USB_CONFIG_FILE" ]; then
+		while read line
+		do
+			case "$line" in
+				usb_mtp_en)
+					MTP_EN=on
+					make_config_string mtp
+					;;
+				usb_adb_en)
+					ADB_EN=on
+					make_config_string adb
+					;;
+				usb_ums_en)
+					UMS_EN=on
+					make_config_string ums
+					;;
+				usb_ntb_en)
+					NTB_EN=on
+					make_config_string ntb
+					;;
+				usb_acm_en)
+					ACM_EN=on
+					make_config_string acm
+					;;
+				usb_ncm_en)
+					NCM_EN=on
+					make_config_string ncm
+					;;
+				usb_uac1_en)
+					UAC1_EN=on
+					make_config_string uac1
+					;;
+				usb_uac2_en)
+					UAC2_EN=on
+					make_config_string uac2
+					;;
+				usb_uvc_en)
+					UVC_EN=on
+					make_config_string uvc
+					;;
+				usb_rndis_en)
+					RNDIS_EN=on
+					make_config_string rndis
+					;;
+				usb_hid_en)
+					HID_EN=on
+					make_config_string hid
+					;;
+				*)
+					parse_parameter ${line}
+					;;
+			esac
+		done < $USB_CONFIG_FILE
+	fi
 
-	case "$CONFIG_STRING" in
-		ums)
-			PID=0x0000
-			;;
-		mtp)
-			PID=0x0001
-			;;
-		adb)
-			PID=0x0006
-			;;
-		mtp_adb | adb_mtp)
-			PID=0x0011
-			;;
-		ums_adb | adb_ums)
-			PID=0x0018
-			;;
-		acm)
-			PID=0x1005
-			;;
-		*)
-			PID=0x0019
-	esac
+	PID=0x0011 # Composite Product ID
 }
 
 use_os_desc()
@@ -233,55 +216,7 @@ pre_run_binary()
 	if [ $NTB_EN = on ];then
 		mkdir /dev/usb-ffs/ntb -m 0770
 		mount -o uid=2000,gid=2000 -t functionfs ntb /dev/usb-ffs/ntb
-		# Not start app here
 	fi
-
-	# Add uvc app here with start-stop-daemon
-}
-
-configure_uvc_resolution_yuyv()
-{
-	W=$1
-	H=$2
-	DIR=${UVC_U_DIR}/${H}p/
-	mkdir ${DIR}
-	echo $W > ${DIR}/wWidth
-	echo $H > ${DIR}/wHeight
-	echo 333333 > ${DIR}/dwDefaultFrameInterval
-	echo $((W*H*20)) > ${DIR}/dwMinBitRate
-	echo $((W*H*20)) > ${DIR}/dwMaxBitRate
-	echo $((W*H*2)) > ${DIR}/dwMaxVideoFrameBufferSize
-	echo -e "333333\n666666\n1000000\n2000000" > ${DIR}/dwFrameInterval
-}
-
-configure_uvc_resolution_mjpeg()
-{
-	W=$1
-	H=$2
-	DIR=${UVC_M_DIR}/${H}p/
-	mkdir ${DIR}
-	echo $W > ${DIR}/wWidth
-	echo $H > ${DIR}/wHeight
-	echo 333333 > ${DIR}/dwDefaultFrameInterval
-	echo $((W*H*20)) > ${DIR}/dwMinBitRate
-	echo $((W*H*20)) > ${DIR}/dwMaxBitRate
-	echo $((W*H*2)) > ${DIR}/dwMaxVideoFrameBufferSize
-	echo -e "333333\n666666\n1000000\n2000000" > ${DIR}/dwFrameInterval
-}
-
-configure_uvc_resolution_h264()
-{
-	W=$1
-	H=$2
-	DIR=${UVC_F_DIR}/${H}p/
-	mkdir ${DIR}
-	echo $W > ${DIR}/wWidth
-	echo $H > ${DIR}/wHeight
-	echo 333333 > ${DIR}/dwDefaultFrameInterval
-	echo $((W*H*10)) > ${DIR}/dwMinBitRate
-	echo $((W*H*10)) > ${DIR}/dwMaxBitRate
-	#echo $((W*H*2)) > ${DIR}/dwMaxVideoFrameBufferSize
-	echo -e "333333\n666666\n1000000\n2000000" > ${DIR}/dwFrameInterval
 }
 
 syslink_function()
@@ -296,76 +231,18 @@ bind_functions()
 
 	test $UAC1_EN = on && syslink_function uac1.gs0
 	test $UAC2_EN = on && syslink_function uac2.gs0
-
-	if [ $UVC_EN = on ];then
-		#echo 3072 > ${UVC_DIR}/streaming_maxpacket
-		#echo 1 > ${UVC_DIR}/streaming_bulk
-
-		mkdir ${UVC_CONTROL_DIR}/header/h
-		ln -s ${UVC_CONTROL_DIR}/header/h ${UVC_CONTROL_DIR}/class/fs/h
-		ln -s ${UVC_CONTROL_DIR}/header/h ${UVC_CONTROL_DIR}/class/ss/h
-
-		##YUYV support config
-		mkdir ${UVC_U_DIR}
-		configure_uvc_resolution_yuyv 640 480
-		configure_uvc_resolution_yuyv 1280 720
-
-		##mjpeg support config
-		mkdir ${UVC_M_DIR}
-		configure_uvc_resolution_mjpeg 640 480
-		configure_uvc_resolution_mjpeg 1280 720
-		configure_uvc_resolution_mjpeg 1920 1080
-		configure_uvc_resolution_mjpeg 2560 1440
-		configure_uvc_resolution_mjpeg 2592 1944
-
-		## h.264 support config
-		mkdir ${UVC_F_DIR}
-		configure_uvc_resolution_h264 640 480
-		configure_uvc_resolution_h264 1280 720
-		configure_uvc_resolution_h264 1920 1080
-
-		mkdir ${UVC_STREAMING_DIR}/header/h
-		ln -s ${UVC_U_DIR} ${UVC_STREAMING_DIR}/header/h/u
-		ln -s ${UVC_M_DIR} ${UVC_STREAMING_DIR}/header/h/m
-		ln -s ${UVC_F_DIR} ${UVC_STREAMING_DIR}/header/h/f
-		ln -s ${UVC_STREAMING_DIR}/header/h ${UVC_STREAMING_DIR}/class/fs/h
-		ln -s ${UVC_STREAMING_DIR}/header/h ${UVC_STREAMING_DIR}/class/hs/h
-		ln -s ${UVC_STREAMING_DIR}/header/h ${UVC_STREAMING_DIR}/class/ss/h
-
-		syslink_function uvc.gs6
-	fi
-
+	test $NCM_EN = on && syslink_function ncm.gs0       # LINKED: CDC-NCM Ethernet (usb0)
 	test $RNDIS_EN = on && syslink_function rndis.gs0
 	test $MTP_EN = on && syslink_function mtp.gs0
 	test $NTB_EN = on && syslink_function ffs.ntb
 	test $ADB_EN = on && syslink_function ffs.adb
-	test $ACM_EN = on && syslink_function acm.gs6
 
-	if [ $HID_EN = on ]; then
-		echo 1 > /sys/kernel/config/usb_gadget/rockchip/functions/hid.usb0/protocol
-		echo 1 > /sys/kernel/config/usb_gadget/rockchip/functions/hid.usb0/subclass
-		echo 8 > /sys/kernel/config/usb_gadget/rockchip/functions/hid.usb0/report_length
-		echo -ne \\x05\\x01\\x09\\x06\\xa1\\x01\\x05\\x07\\x19\\xe0\\x29\\xe7\\x15\\x00\\x25\\x01\\x75\\x01\\x95\\x08\\x81\\x02\\x95\\x01\\x75\\x08\\x81\\x03\\x95\\x05\\x75\\x01\\x05\\x08\\x19\\x01\\x29\\x05\\x91\\x02\\x95\\x01\\x75\\x03\\x91\\x03\\x95\\x06\\x75\\x08\\x15\\x00\\x25\\x65\\x05\\x07\\x19\\x00\\x29\\x65\\x81\\x00\\xc0 > /sys/kernel/config/usb_gadget/rockchip/functions/hid.usb0/report_desc
-		syslink_function hid.usb0
+	if [ $ACM_EN = on ]; then
+		syslink_function acm.gs6                        # LINKED: /dev/ttyGS6 (H.265 Video)
+		syslink_function acm.gs7                        # LINKED: /dev/ttyGS7 (Control & Telemetry)
 	fi
 
-	if [ $UMS_EN = on ];then
-		echo ${UMS_RO} > ${USB_FUNCTIONS_DIR}/mass_storage.0/lun.0/ro
-		if [ "$UMS_BLOCK_SIZE" != "0" -a ! -e ${UMS_BLOCK} ]; then
-			dd if=/dev/zero of=${UMS_BLOCK} bs=1M count=${UMS_BLOCK_SIZE}
-			mkfs.${UMS_BLOCK_TYPE} ${UMS_BLOCK}
-			test $? && echo "Warning: failed to mkfs.${UMS_BLOCK_TYPE} ${UMS_BLOCK}"
-		fi
-		mkdir /mnt/ums -p
-		if [ $UMS_BLOCK_AUTO_MOUNT = on ];then
-			mount ${UMS_BLOCK} /mnt/ums
-		else
-			echo ${UMS_BLOCK} > ${USB_FUNCTIONS_DIR}/mass_storage.0/lun.0/file
-		fi
-		syslink_function mass_storage.0
-	fi
-
-	echo ${CONFIG_STRING} > ${USB_CONFIGS_DIR}/strings/${USB_ATTRIBUTE}/configuration
+	echo ${CONFIG_STRING:-"ncm_acm_adb"} > ${USB_CONFIGS_DIR}/strings/${USB_ATTRIBUTE}/configuration
 }
 
 run_binary()
@@ -373,13 +250,11 @@ run_binary()
 	if [ $MTP_EN = on ];then
 		start-stop-daemon --start --quiet --background --exec /usr/bin/mtp-server
 	fi
-	if [ $RNDIS_EN = on ];then
-
-	sleep .5
-	ifconfig usb0 172.32.0.70
-	ifconfig usb0 up
+	
+	if [ $NCM_EN = on -o $RNDIS_EN = on ];then
+		sleep .5
+		ifconfig usb0 192.168.10.110 netmask 255.255.255.0 up # IP Assigned to CDC-NCM Ethernet
 	fi
-
 }
 
 program_kill()
@@ -399,22 +274,7 @@ usb_device_stop()
 case "$1" in
 start)
 	ifconfig lo up
-#	if [ ! -e "/tmp/.usb_config" ]; then
-#		echo "$0: Cannot find .usb_config"
-#		# exit 0
-#		USB_CONFIG_FILE=/tmp/.usb_config
-#		echo "usb_adb_en" >> $USB_CONFIG_FILE
-#	fi
-
-#	if [ -e /tmp/.usb_config ]; then
-#		USB_CONFIG_FILE=/tmp/.usb_config
-#	fi
-
 	parameter_init
-#	if [ -z $CONFIG_STRING ]; then
-#		echo "$0: no function be selected"
-#		exit 0
-#	fi
 	test -d ${USB_CONFIGFS_DIR} || configfs_init
 	use_os_desc
 	echo $PID > ${USB_CONFIGFS_DIR}/idProduct
@@ -429,12 +289,10 @@ stop)
 	usb_device_stop
 	;;
 restart|reload)
-	# Do restart usb by udev
 	echo "USB_FORCE_CHANGED" >> /tmp/.usb_config
 	usb_device_stop
 	sleep 1
 	$0 start
-	# Don't forget to clear "USB_FORCE_CHANGED"
 	sed -i "/USB_FORCE_CHANGED/d" /tmp/.usb_config
 	;;
 *)

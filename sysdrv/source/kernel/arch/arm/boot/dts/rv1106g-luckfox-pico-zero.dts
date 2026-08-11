@@ -125,12 +125,12 @@
 	status = "disabled";
 };
 
-/**********USB**********/
+
+/********** USB Gadget Config **********/
 &usbdrd_dwc3 {
-	status = "okay";
-	dr_mode = "peripheral";
-	//dr_mode = "host";
+	dr_mode = "otg"; /* Enables USB Peripheral / ConfigFS Gadget mode */
 };
+
 
 /**********RTC**********/
 &rtc {
@@ -152,10 +152,77 @@
 	};
 };
 
-/**********SPI**********/
+
+/********** SPI0 Dual CS (IMU + Barometer) **********/
 &spi0 {
-	status = "disabled";
+	status = "okay";
+	num-cs = <2>; /* Enables both CS0 and CS1 */
+	pinctrl-names = "default";
+	/* Includes both CS0 (GPIO1_C0) and CS1 (GPIO1_D2) */
+	pinctrl-0 = <&spi0m0_clk &spi0m0_miso &spi0m0_mosi &spi0m0_cs0 &spi0m0_cs1>;
+	#address-cells = <1>;
+	#size-cells = <0>;
+
 	spidev@0 {
+		compatible = "rockchip,spidev";
+		reg = <0>; /* CS0 -> /dev/spidev0.0 (IMU) */
 		spi-max-frequency = <50000000>;
+		status = "okay";
+	};
+
+	spidev@1 {
+		compatible = "rockchip,spidev";
+		reg = <1>; /* CS1 -> /dev/spidev0.1 (Barometer) */
+		spi-max-frequency = <50000000>;
+		status = "okay";
 	};
 };
+
+/**********PWM Modules**********/
+/* PWM1 M0*/
+&pwm1 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&pwm1m0_pins>;
+};
+
+/* PWM3 M1 on GPIO1_B0 */
+&pwm3 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&pwm3m1_pins>;
+};
+
+/* PWM7 M1 on GPIO1_B1 */
+&pwm7 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&pwm7m1_pins>;
+};
+
+/* PWM10 M1 on GPIO1_C6 */
+&pwm10 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&pwm10m1_pins>;
+};
+
+/* PWM11 M2 on GPIO1_D3 */
+&pwm11 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&pwm11m2_pins>;
+};
+
+/********** UARTs **********/
+&uart0 { status = "okay"; };
+&uart1 { status = "okay"; };
+&uart3 { status = "okay"; };
+&uart4 { status = "okay"; };
+
+/********** I2C **********/
+&i2c1 { status = "okay"; };
+&i2c2 { status = "okay"; };
+&i2c3 { status = "okay"; };
+
+

@@ -1,7 +1,7 @@
-
 // SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 /*
  * Copyright (c) 2022 Rockchip Electronics Co., Ltd.
+ * Customized for Luckfox Pico Zero with Sony IMX462 Camera
  */
 
 #include "rv1106-evb.dtsi"
@@ -89,29 +89,25 @@
 		};
 	};
 
-	out_osc_mia1321: out-osc-mia1321 {
+	/* Master Clock Generator for Sony IMX462 (37.125 MHz) */
+	out_osc_imx462: out-osc-imx462 {
 		compatible = "fixed-clock";
-		clock-output-names = "out-osc-mia1321";
-		clock-frequency = <26000000>;
-		#clock-cells = <0>;
-	};
-
-	out_osc_imx415: out-osc-imx415 {
-		compatible = "fixed-clock";
-		clock-output-names = "out-osc-imx415";
+		clock-output-names = "out-osc-imx462";
 		clock-frequency = <37125000>;
 		#clock-cells = <0>;
 	};
 
+	/* Hardware IR-Cut Filter Controller */
 	cam_ircut0: cam_ircut {
 		status = "okay";
 		compatible = "rockchip,ircut";
 		rockchip,camera-module-index = <0>;
 		rockchip,camera-module-facing = "back";
+		gpios = <&gpio3 RK_PC4 GPIO_ACTIVE_HIGH>;
 	};
 };
 
-/***************************** audio ********************************/
+/***************************** AUDIO ********************************/
 &i2s0_8ch {
 	#sound-dai-cells = <0>;
 	status = "okay";
@@ -122,7 +118,7 @@
 	status = "okay";
 };
 
-/************************* FIQ_DUBUGGER ****************************/
+/************************* FIQ_DEBUGGER ****************************/
 &fiq_debugger {
 	rockchip,irq-mode-enable = <1>;
 	status = "okay";
@@ -155,7 +151,7 @@
 	cpu-supply = <&vdd_arm>;
 };
 
-/*************************** CSI *********************************/
+/*************************** MIPI CSI *********************************/
 &csi2_dphy_hw {
 	status = "okay";
 };
@@ -172,20 +168,12 @@
 			#address-cells = <1>;
 			#size-cells = <0>;
 
-			//mia1321
+			// MIPI CSI D-PHY Endpoint linked to IMX462 (4 data lanes)
 			csi_dphy_input0: endpoint@0 {
 				reg = <0>;
-				remote-endpoint = <&mia1321_out>;
-				data-lanes = <1 2>;
-			};
-
-			//imx415
-			csi_dphy_input1: endpoint@1 {
-				reg = <1>;
-				remote-endpoint = <&imx415_out>;
+				remote-endpoint = <&imx290_out>;
 				data-lanes = <1 2 3 4>;
 			};
-
 		};
 
 		port@1 {
@@ -194,8 +182,8 @@
 			#size-cells = <0>;
 
 			csi_dphy_output: endpoint@0 {
-					reg = <0>;
-					remote-endpoint = <&mipi_csi2_input>;
+				reg = <0>;
+				remote-endpoint = <&mipi_csi2_input>;
 			};
 		};
 	};
@@ -206,44 +194,28 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&i2c4m2_xfer>;
 
-	mia1321: mia1321@60 {
-		compatible = "imagedesign,mia1321";
-		reg = <0x60>;
-		clocks = <&out_osc_mia1321>;
-		clock-names = "xvclk";
-		reset-gpios = <&gpio3 RK_PC5 GPIO_ACTIVE_HIGH>;
-		pinctrl-names = "default";
-		pinctrl-0 = <&cam_io_1>;
-		rockchip,camera-module-index = <0>;
-		rockchip,camera-module-facing = "back";
-		rockchip,camera-module-name = "MIA1321";
-		rockchip,camera-module-lens-name = "30IRC-F16";
-		port {
-				mia1321_out: endpoint {
-					remote-endpoint = <&csi_dphy_input0>;
-					data-lanes = <1 2 3 4>;
-				};
-		};
-	};
-	
-	imx415: imx415@37 {
-		compatible = "sony,imx415";
+	imx290: imx290@1a {
 		status = "okay";
-		reg = <0x37>;
-		clocks = <&out_osc_imx415>;
-		clock-names = "xvclk";
+		compatible = "sony,imx290";
+		reg = <0x1a>;
+		clocks = <&out_osc_imx462>;
+		clock-names = "xclk";
+		clock-frequency = <37125000>;
 		reset-gpios = <&gpio3 RK_PC5 GPIO_ACTIVE_LOW>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&cam_io_1>;
+
 		rockchip,camera-module-index = <0>;
 		rockchip,camera-module-facing = "back";
-		rockchip,camera-module-name = "CMK-OT2022-PX1";
-		rockchip,camera-module-lens-name = "IR0147-36IRC-8M-F20";
+		rockchip,camera-module-name = "IMX462";
+		rockchip,camera-module-lens-name = "default";
 		lens-focus = <&cam_ircut0>;
+
 		port {
-			imx415_out: endpoint {
-				remote-endpoint = <&csi_dphy_input1>;
+			imx290_out: endpoint {
+				remote-endpoint = <&csi_dphy_input0>;
 				data-lanes = <1 2 3 4>;
+				link-frequencies = /bits/ 64 <222750000 148500000>;
 			};
 		};
 	};
@@ -262,8 +234,8 @@
 			#size-cells = <0>;
 
 			mipi_csi2_input: endpoint@1 {
-					reg = <1>;
-					remote-endpoint = <&csi_dphy_output>;
+				reg = <1>;
+				remote-endpoint = <&csi_dphy_output>;
 			};
 		};
 
@@ -273,8 +245,8 @@
 			#size-cells = <0>;
 
 			mipi_csi2_output: endpoint@0 {
-					reg = <0>;
-					remote-endpoint = <&cif_mipi_in>;
+				reg = <0>;
+				remote-endpoint = <&cif_mipi_in>;
 			};
 		};
 	};
@@ -290,9 +262,8 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&mipi_pins>;
 	port {
-		/* MIPI CSI-2 endpoint */
 		cif_mipi_in: endpoint {
-				remote-endpoint = <&mipi_csi2_output>;
+			remote-endpoint = <&mipi_csi2_output>;
 		};
 	};
 };
@@ -301,9 +272,8 @@
 	status = "okay";
 
 	port {
-		/* MIPI CSI-2 endpoint */
 		mipi_lvds_sditf: endpoint {
-				remote-endpoint = <&isp_in>;
+			remote-endpoint = <&isp_in>;
 		};
 	};
 };
@@ -317,7 +287,7 @@
 
 	port@0 {
 		isp_in: endpoint {
-				remote-endpoint = <&mipi_lvds_sditf>;
+			remote-endpoint = <&mipi_lvds_sditf>;
 		};
 	};
 };
@@ -353,27 +323,21 @@
 	pinctrl-0 = <&i2c2m0_xfer>;
 };
 &i2c3 {
-	pinctrl-0 = <&i2c3m0_xfer &i2c3m1_xfer &i2c3m2_xfer>;
-};
-&i2c4 {
-	pinctrl-names = "default", "config";
-	pinctrl-0 = <&i2c4m2_xfer>;
-	pinctrl-1 = <&i2c4m0_xfer &i2c4m1_xfer>;
+	pinctrl-0 = <&i2c3m2_xfer>;
 };
 
 // UART
 &uart0 {
-	pinctrl-0 = <&uart0m0_xfer &uart0m1_xfer>;
+	pinctrl-0 = <&uart0m0_xfer>;
 };
 &uart1 {
 	pinctrl-0 = <&uart1m1_xfer>;
 };
 &uart3 {
-
-	pinctrl-0 = <&uart3m0_xfer &uart3m1_xfer>;
+	pinctrl-0 = <&uart3m1_xfer>;
 };
 &uart4 {
-	pinctrl-0 = <&uart4m0_xfer &uart4m1_xfer>;
+	pinctrl-0 = <&uart4m1_xfer>;
 };
 &uart5 {
 	pinctrl-0 = <&uart5m1_xfer>;
@@ -384,25 +348,25 @@
 	pinctrl-0 = <&pwm0m1_pins>;
 };
 &pwm1 {
-	pinctrl-0 = <&pwm1m0_pins &pwm1m1_pins &pwm1m2_pins>;
+	pinctrl-0 = <&pwm1m0_pins>;
 };
 &pwm2 {
-	pinctrl-0 = <&pwm2m0_pins &pwm2m1_pins &pwm2m2_pins>;
+	pinctrl-0 = <&pwm2m0_pins>;
 };
 &pwm3 {
-	pinctrl-0 = <&pwm3m1_pins &pwm3m2_pins>;
+	pinctrl-0 = <&pwm3m1_pins>;
 };
 &pwm4 {
-	pinctrl-0 = <&pwm4m0_pins &pwm4m1_pins &pwm4m2_pins>;
+	pinctrl-0 = <&pwm4m0_pins>;
 };
 &pwm5 {
-	pinctrl-0 = <&pwm5m1_pins &pwm5m2_pins>;
+	pinctrl-0 = <&pwm5m1_pins>;
 };
 &pwm6 {
-	pinctrl-0 = <&pwm6m1_pins &pwm6m2_pins>;
+	pinctrl-0 = <&pwm6m1_pins>;
 };
 &pwm7 {
-	pinctrl-0 = <&pwm7m0_pins &pwm7m1_pins>;
+	pinctrl-0 = <&pwm7m1_pins>;
 };
 &pwm8 {
 	pinctrl-0 = <&pwm8m1_pins>;
@@ -411,10 +375,10 @@
 	pinctrl-0 = <&pwm9m1_pins>;
 };
 &pwm10 {
-	pinctrl-0 = <&pwm10m1_pins &pwm10m2_pins>;
+	pinctrl-0 = <&pwm10m1_pins>;
 };
 &pwm11 {
-	pinctrl-0 = <&pwm11m1_pins &pwm11m2_pins>;
+	pinctrl-0 = <&pwm11m2_pins>;
 };
 
 &pinctrl {
@@ -440,6 +404,9 @@
 		};
 		spi0m0_cs0: spi0m0-cs0 {
 			rockchip,pins = <1 RK_PC0 4 &pcfg_pull_none>;
+		};
+		spi0m0_cs1: spi0m0-cs1 {
+			rockchip,pins = <1 RK_PD2 5 &pcfg_pull_none>; /* GPIO1_D2 (RK_PD2), function 5 */
 		};
 	};
 };

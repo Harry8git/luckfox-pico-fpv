@@ -1,0 +1,58 @@
+In:
+/Users/hspencer/OrbStack/luckfox-dev/home/hspencer/luckfox-pico/project/cfg/BoardConfig_IPC/BoardConfig-EMMC-Buildroot-RV1106_Luckfox_Pico_Zero-IPC.mk
+
+Add:
+#export RK_APP_TYPE=RKIPC_RV1106
+export RK_APP_TYPE=None
+export RK_CAMERA_SENSOR_IQFILES="imx290_IMX462_default.json"
+and wifi credentials
+
+
+/Users/hspencer/OrbStack/luckfox-dev/home/hspencer/luckfox-pico/project/cfg/rootfs_overlay/etc/init.d/S99wlan0
+
+./media/isp/release_camera_engine_rkaiq_rv1106_arm-rockchip830-linux-uclibcgnueabihf/isp_iqfiles/imx290_IMX462_default.json
+
+/Users/hspencer/OrbStack/luckfox-dev/home/hspencer/luckfox-pico/sysdrv/source/kernel/arch/arm/boot/dts/rv1106g-luckfox-pico-zero.dts
+
+
+
+/Users/hspencer/OrbStack/luckfox-dev/home/hspencer/luckfox-pico/sysdrv/source/kernel/arch/arm/configs/luckfox_rv1106_linux_defconfig
+
+
+./rkflash.sh update
+
+
+sudo ./upgrade_tool uf /Users/hspencer/OrbStack/luckfox-dev/home/hspencer/luckfox-pico/output/image/update.img
+
+
+sudo ifconfig en9 172.32.0.100 netmask 255.255.0.0
+ssh root@172.32.0.93
+
+/Users/hspencer/OrbStack/luckfox-dev/home/hspencer/luckfox-pico/sysdrv/cfg/package.mk
+
+
+
+
+
+
+/Users/hspencer/OrbStack/luckfox-dev/home/hspencer/luckfox-pico/project/cfg/rootfs_overlay/etc/wpa_supplicant.conf
+# Network 1: Home Wi-Fi
+network={
+    ssid="Home_WiFi_Name"
+    psk="Home_Password"
+    priority=2
+}
+
+# Network 2: Phone Hotspot (For field flying)
+network={
+    ssid="My_Phone_Hotspot"
+    psk="Hotspot_Password"
+    priority=1
+}
+
+
+
+
+ssh root@192.168.1.225
+ssh root@172.32.0.93
+

@@ -10,12 +10,12 @@ $(eval $(call MACRO_CHECK_ENABLE_PKG, RK_ENABLE_ADBD))
 
 
 # Enable build gdb and gdbserver debug tool
-CONFIG_SYSDRV_ENABLE_GDB=y
+CONFIG_SYSDRV_ENABLE_GDB=n
 $(eval $(call MACRO_CHECK_ENABLE_PKG, RK_ENABLE_GDB))
 
 
 # Enable build wifi
-CONFIG_SYSDRV_ENABLE_WIFI=n
+CONFIG_SYSDRV_ENABLE_WIFI=y
 $(eval $(call MACRO_CHECK_ENABLE_PKG, RK_ENABLE_WIFI))
 
 # Enable rockchip test

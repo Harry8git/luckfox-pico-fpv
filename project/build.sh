@@ -1,6 +1,9 @@
 #!/bin/bash
 set -eE
 
+export MAKEFLAGS=""
+export MFLAGS=""
+export RK_JOBS=1
 export LC_ALL=C
 export LD_LIBRARY_PATH=
 RECORD_IFS="$IFS"
@@ -12,6 +15,13 @@ function unset_env_config_rk() {
 	rm -f $tmp_file
 }
 unset_env_config_rk
+
+# =======================================================
+# Fix for OrbStack/Docker Jobserver File Descriptor Bug
+# =======================================================
+export MAKEFLAGS=""
+export MFLAGS=""
+export RK_JOBS=1
 
 ################################################################################
 # Global Variable Configure
