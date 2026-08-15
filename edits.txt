@@ -56,3 +56,20 @@ network={
 ssh root@192.168.1.225
 ssh root@172.32.0.93
 
+
+
+
+
+/oem/usr/bin/simple_vi_bind_venc_rtsp
+
+cat /proc/interrupts | grep -iE "csi|dphy"
+v4l2-ctl -d /dev/v4l-subdev2 --list-ctrls
+dmesg | grep -iE "imx|rkcif|rkisp|csi|timeout|frame" | tail -n 20
+dmesg | tail -n 10
+
+
+
+killall -9 rkipc rkaiq_3A_server simple_vi_bind_venc_rtsp 2>/dev/null || true
+
+
+

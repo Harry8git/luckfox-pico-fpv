@@ -6,10 +6,10 @@
 . /etc/profile
 
 UMS_EN=off
-ADB_EN=on
+ADB_EN=off
 MTP_EN=off
 NTB_EN=off
-ACM_EN=on       # ENABLED: CDC-ACM (Dual Serial Ports: /dev/ttyGS6 for Video, /dev/ttyGS7 for Control)
+ACM_EN=on       # ENABLED: CDC-ACM Dual Serial Ports (/dev/ttyGS0 for Video, /dev/ttyGS1 for Control)
 NCM_EN=on       # ENABLED: CDC-NCM (Native USB Ethernet for macOS)
 UAC1_EN=off
 UAC2_EN=off
@@ -26,19 +26,6 @@ USB_CONFIGFS_DIR=${CONFIGFS_DIR}/usb_gadget/${USB_GROUP}
 USB_STRINGS_DIR=${USB_CONFIGFS_DIR}/strings/${USB_ATTRIBUTE}
 USB_FUNCTIONS_DIR=${USB_CONFIGFS_DIR}/functions
 USB_CONFIGS_DIR=${USB_CONFIGFS_DIR}/configs/${USB_SKELETON}
-
-UMS_BLOCK=/userdata/ums_shared.img
-UMS_BLOCK_SIZE=0	#unit M
-UMS_BLOCK_TYPE=fat
-UMS_BLOCK_AUTO_MOUNT=off
-UMS_RO=0
-
-UVC_DIR=${USB_FUNCTIONS_DIR}/uvc.gs6/
-UVC_STREAMING_DIR=${UVC_DIR}/streaming/
-UVC_CONTROL_DIR=${UVC_DIR}/control/
-UVC_U_DIR=${UVC_STREAMING_DIR}/uncompressed/u/
-UVC_M_DIR=${UVC_STREAMING_DIR}/mjpeg/m/
-UVC_F_DIR=${UVC_STREAMING_DIR}/framebased/f/
 
 test_write()
 {
@@ -57,9 +44,9 @@ function_init()
 	mkdir ${USB_FUNCTIONS_DIR}/ffs.ntb
 	mkdir ${USB_FUNCTIONS_DIR}/mtp.gs0
 	mkdir ${USB_FUNCTIONS_DIR}/rndis.gs0
-	mkdir ${USB_FUNCTIONS_DIR}/ncm.gs0       # CDC-NCM Ethernet Node
-	mkdir ${USB_FUNCTIONS_DIR}/acm.gs6       # CDC-ACM Port 1: /dev/ttyGS6 (H.265 Video)
-	mkdir ${USB_FUNCTIONS_DIR}/acm.gs7       # CDC-ACM Port 2: /dev/ttyGS7 (Control/Telemetry)
+	mkdir ${USB_FUNCTIONS_DIR}/ncm.gs0           # CDC-NCM Ethernet Node (usb0)
+	mkdir ${USB_FUNCTIONS_DIR}/acm.video0         # Port 1 -> /dev/ttyGS0 (H.265 Video)
+	mkdir ${USB_FUNCTIONS_DIR}/acm.telemetry0     # Port 2 -> /dev/ttyGS1 (Control/Telemetry)
 	mkdir ${USB_FUNCTIONS_DIR}/mass_storage.0
 	mkdir ${USB_FUNCTIONS_DIR}/uvc.gs6
 	mkdir ${USB_FUNCTIONS_DIR}/hid.usb0
@@ -67,7 +54,6 @@ function_init()
 
 configfs_init()
 {
-	echo "Debug: configfs_init"
 	mkdir /dev/usb-ffs
 
 	mount -t configfs none ${CONFIGFS_DIR}
@@ -105,95 +91,8 @@ make_config_string()
 	fi
 }
 
-parse_parameter()
-{
-	NAME=`echo $1 | awk -F "=" '{print $1}'`
-	VAR=`echo $1 | awk -F "=" '{print $2}'`
-
-	case "$NAME" in
-		ums_block)
-			UMS_BLOCK=${VAR}
-			;;
-		ums_block_size)
-			if [ ! "$VAR" -gt 0 ] 2>/dev/null ;then
-				echo "$VAR is not a number"
-				exit 1
-			fi
-			UMS_BLOCK_SIZE=${VAR}
-			;;
-		ums_block_type)
-			UMS_BLOCK_TYPE=${VAR}
-			;;
-		ums_block_auto_mount)
-			UMS_BLOCK_AUTO_MOUNT=${VAR}
-			;;
-		ums_ro)
-			if [ "$VAR" != "off" ]; then
-				echo "Set UMS read-only"
-				UMS_RO=1
-			fi
-				UMS_RO=0
-			;;
-	esac
-}
-
 parameter_init()
 {
-	if [ -f "$USB_CONFIG_FILE" ]; then
-		while read line
-		do
-			case "$line" in
-				usb_mtp_en)
-					MTP_EN=on
-					make_config_string mtp
-					;;
-				usb_adb_en)
-					ADB_EN=on
-					make_config_string adb
-					;;
-				usb_ums_en)
-					UMS_EN=on
-					make_config_string ums
-					;;
-				usb_ntb_en)
-					NTB_EN=on
-					make_config_string ntb
-					;;
-				usb_acm_en)
-					ACM_EN=on
-					make_config_string acm
-					;;
-				usb_ncm_en)
-					NCM_EN=on
-					make_config_string ncm
-					;;
-				usb_uac1_en)
-					UAC1_EN=on
-					make_config_string uac1
-					;;
-				usb_uac2_en)
-					UAC2_EN=on
-					make_config_string uac2
-					;;
-				usb_uvc_en)
-					UVC_EN=on
-					make_config_string uvc
-					;;
-				usb_rndis_en)
-					RNDIS_EN=on
-					make_config_string rndis
-					;;
-				usb_hid_en)
-					HID_EN=on
-					make_config_string hid
-					;;
-				*)
-					parse_parameter ${line}
-					;;
-			esac
-		done < $USB_CONFIG_FILE
-	fi
-
 	PID=0x0011 # Composite Product ID
 }
 
@@ -212,11 +111,6 @@ pre_run_binary()
 		mount -o uid=2000,gid=2000 -t functionfs adb /dev/usb-ffs/adb
 		start-stop-daemon --start --quiet --background --exec /usr/bin/adbd
 	fi
-
-	if [ $NTB_EN = on ];then
-		mkdir /dev/usb-ffs/ntb -m 0770
-		mount -o uid=2000,gid=2000 -t functionfs ntb /dev/usb-ffs/ntb
-	fi
 }
 
 syslink_function()
@@ -229,17 +123,12 @@ bind_functions()
 {
 	USB_FUNCTIONS_CNT=1
 
-	test $UAC1_EN = on && syslink_function uac1.gs0
-	test $UAC2_EN = on && syslink_function uac2.gs0
 	test $NCM_EN = on && syslink_function ncm.gs0       # LINKED: CDC-NCM Ethernet (usb0)
-	test $RNDIS_EN = on && syslink_function rndis.gs0
-	test $MTP_EN = on && syslink_function mtp.gs0
-	test $NTB_EN = on && syslink_function ffs.ntb
 	test $ADB_EN = on && syslink_function ffs.adb
 
 	if [ $ACM_EN = on ]; then
-		syslink_function acm.gs6                        # LINKED: /dev/ttyGS6 (H.265 Video)
-		syslink_function acm.gs7                        # LINKED: /dev/ttyGS7 (Control & Telemetry)
+		syslink_function acm.video0                     # LINKED: /dev/ttyGS0 (H.265 Video)
+		syslink_function acm.telemetry0                 # LINKED: /dev/ttyGS1 (Control & Telemetry)
 	fi
 
 	echo ${CONFIG_STRING:-"ncm_acm_adb"} > ${USB_CONFIGS_DIR}/strings/${USB_ATTRIBUTE}/configuration
@@ -247,13 +136,9 @@ bind_functions()
 
 run_binary()
 {
-	if [ $MTP_EN = on ];then
-		start-stop-daemon --start --quiet --background --exec /usr/bin/mtp-server
-	fi
-	
 	if [ $NCM_EN = on -o $RNDIS_EN = on ];then
 		sleep .5
-		ifconfig usb0 192.168.10.110 netmask 255.255.255.0 up # IP Assigned to CDC-NCM Ethernet
+		ifconfig usb0 172.32.0.93 netmask 255.255.0.0 up # Matches S99usb0config static IP
 	fi
 }
 
@@ -267,7 +152,6 @@ usb_device_stop()
 {
 	echo "none" > ${USB_CONFIGFS_DIR}/UDC
 	program_kill adbd
-	program_kill mtp-server
 	ls ${USB_CONFIGS_DIR} | grep f[0-9] | xargs -I {} rm ${USB_CONFIGS_DIR}/{}
 }
 

@@ -9,7 +9,7 @@
 #include <dt-bindings/display/media-bus-format.h>
 
 / {
-	chosen {
+chosen {
 		bootargs = "earlycon=uart8250,mmio32,0xff4c0000 console=ttyFIQ0 root=/dev/mmcblk0p7 rootwait snd_soc_core.prealloc_buffer_size_kbytes=16 coherent_pool=0";
 	};
 
@@ -172,7 +172,7 @@
 			csi_dphy_input0: endpoint@0 {
 				reg = <0>;
 				remote-endpoint = <&imx290_out>;
-				data-lanes = <1 2 3 4>;
+				data-lanes = <1 2>;
 			};
 		};
 
@@ -196,7 +196,7 @@
 
 	imx290: imx290@1a {
 		status = "okay";
-		compatible = "sony,imx290";
+		compatible = "sony,imx462";           /* MATCHES DRIVER MODEL */
 		reg = <0x1a>;
 		clocks = <&out_osc_imx462>;
 		clock-names = "xclk";
@@ -207,15 +207,15 @@
 
 		rockchip,camera-module-index = <0>;
 		rockchip,camera-module-facing = "back";
-		rockchip,camera-module-name = "IMX462";
+		rockchip,camera-module-name = "imx462"; /* MATCHES RKAIQ IQ FILE */
 		rockchip,camera-module-lens-name = "default";
 		lens-focus = <&cam_ircut0>;
 
 		port {
 			imx290_out: endpoint {
 				remote-endpoint = <&csi_dphy_input0>;
-				data-lanes = <1 2 3 4>;
-				link-frequencies = /bits/ 64 <222750000 148500000>;
+				data-lanes = <1 2>;
+				link-frequencies = /bits/ 64 <445500000>; /* 2-LANE 1080P60 LINK FREQ */
 			};
 		};
 	};
