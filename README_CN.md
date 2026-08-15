@@ -1,3 +1,17 @@
+# Luckfox Pico (Custom Build by Harry)
+
+This is a customized version of the [Luckfox Pico SDK](https://github.com/LuckfoxTECH/luckfox-pico) tailored for custom camera sensor integration and application development.
+
+## 🚀 Key Modifications in This Repo:
+- **Sensor Tuning & Drivers:** Added Sony IMX462 sensor configuration and ISP IQ tuning files (`imx462_imx462_default.json`).
+- **Kernel Configurations:** Updated RV1106 Device Tree (`rv1106-luckfox-pico-zero-ipc.dtsi`) and Linux defconfig.
+- **Media & Streaming:** Customized RTSP sample applications (`simple_vi_bind_venc_rtsp.c`).
+- **Tools:** Added raw image decoding scripts (`decode_raw.py`).
+
+---
+
+## Original Luckfox Documentation & Instructions:
+
 ![luckfox](https://github.com/LuckfoxTECH/luckfox-pico/assets/144299491/cec5c4a5-22b9-4a9a-abb1-704b11651e88)
 # Luckfox Pico SDK
 [English Version](./README.md)
