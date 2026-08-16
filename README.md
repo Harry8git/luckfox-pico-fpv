@@ -6,7 +6,6 @@ This is a customized version of the [Luckfox Pico SDK](https://github.com/Luckfo
 - **Sensor Tuning & Drivers:** Added Sony IMX462 sensor configuration and ISP IQ tuning files (`imx462_imx462_default.json`).
 - **Kernel Configurations:** Updated RV1106 Device Tree (`rv1106-luckfox-pico-zero-ipc.dtsi`) and Linux defconfig.
 - **Media & Streaming:** Customized RTSP sample applications (`simple_vi_bind_venc_rtsp.c`).
-- **Tools:** Added raw image decoding scripts (`decode_raw.py`).
 
 ---
 

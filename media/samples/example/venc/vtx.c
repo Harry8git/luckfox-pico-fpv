@@ -1,155 +1,92 @@
 /*
- * Copyright 2021 Rockchip Electronics Co. LTD
- * Custom H.265 Hardware Encoder to USB CDC-ACM Streamer
- *usage: 
-./build.sh media
-
-
- RkLunch-stop.sh
-/userdata/sample_venc_cdc -a /etc/iqfiles/
-/userdata/vtx -a /etc/iqfiles/
-*/
-
-#ifdef __cplusplus
-#if __cplusplus
-extern "C" {
-#endif
-#endif /* End of #ifdef __cplusplus */
+ * Dedicated Low-Latency H.265 720p60 USB CDC Streamer (VTX)
+ * Hardware Pipeline: Sony IMX462 (1080p60) -> VI (720p Scaler) -> VENC (H.265 CBR+GIR) -> USB CDC (/dev/ttyGS0)
+ */
 
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <getopt.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/prctl.h>
 #include <time.h>
 #include <unistd.h>
 
-#include "sample_comm.h"
+#ifdef RV1126_RV1109
+#include <rk_aiq_user_api_camgroup.h>
+#include <rk_aiq_user_api_imgproc.h>
+#include <rk_aiq_user_api_sysctl.h>
+#else
+#include <rk_aiq_user_api2_camgroup.h>
+#include <rk_aiq_user_api2_imgproc.h>
+#include <rk_aiq_user_api2_sysctl.h>
+#endif
 
+#include "rk_debug.h"
+#include "rk_defines.h"
+#include "rk_mpi_mb.h"
+#include "rk_mpi_sys.h"
+#include "rk_mpi_venc.h"
+#include "rk_mpi_vi.h"
 
-#include "rk_aiq_user_api2_sysctl.h"
+#define VTX_WIDTH          1280
+#define VTX_HEIGHT         720
+#define VTX_FPS            60
+#define VTX_BITRATE_KBPS   2400        /* 2.4 Mbps CBR */
+#define VTX_CDC_DEV        "/dev/ttyGS0"
+#define VTX_IQ_DIR         "/etc/iqfiles"
 
-
-typedef struct _rkMpiCtx {
-	SAMPLE_VI_CTX_S vi;
-	SAMPLE_VO_CTX_S vo;
-	SAMPLE_VPSS_CTX_S vpss;
-	SAMPLE_VENC_CTX_S venc;
-	SAMPLE_RGN_CTX_S rgn[2];
-} SAMPLE_MPI_CTX_S;
-
+static rk_aiq_sys_ctx_t *g_aiq_ctx = NULL;
 static bool quit = false;
+
 static void sigterm_handler(int sig) {
-	fprintf(stderr, "\nCaught signal %d, shutting down video stream...\n", sig);
+	fprintf(stderr, "\nCaught signal %d, stopping VTX streamer...\n", sig);
 	quit = true;
 }
 
-static RK_CHAR optstr[] = "?::a::b:w:h:l:o:e:d:D:I:i:L:M:";
-static const struct option long_options[] = {
-    {"aiq", optional_argument, NULL, 'a'},
-    {"bitrate", required_argument, NULL, 'b'},
-    {"device_name", required_argument, NULL, 'd'},
-    {"width", required_argument, NULL, 'w'},
-    {"height", required_argument, NULL, 'h'},
-    {"input_bmp_name", required_argument, NULL, 'i'},
-    {"loop_count", required_argument, NULL, 'l'},
-    {"output_path", required_argument, NULL, 'o'},
-    {"encode", required_argument, NULL, 'e'},
-    {"disp_devid", required_argument, NULL, 'D'},
-    {"camid", required_argument, NULL, 'I'},
-    {"multictx", required_argument, NULL, 'M'},
-    {"fps", required_argument, NULL, 'f'},
-    {"hdr_mode", required_argument, NULL, 'h' + 'm'},
-    {"help", optional_argument, NULL, '?'},
-    {NULL, 0, NULL, 0},
-};
-
-/******************************************************************************
- * function : show usage
- ******************************************************************************/
-static void print_usage(const RK_CHAR *name) {
-	printf("Usage example (H.265 to USB CDC):\n");
-	printf("\t%s -w 1920 -h 1080 -a /etc/iqfiles/ -I 0 -e h265cbr -b 2048 -d /dev/ttyGS0\n", name);
-	printf("\nOptions:\n");
-#ifdef RKAIQ
-	printf("\t-a | --aiq: path to sensor IQ JSON directory, e.g., -a /etc/iqfiles/\n");
-	printf("\t-M | --multictx: switch multictx in ISP, 0=disable, 1=enable (default 0)\n");
-#endif
-	printf("\t-d | --device_name: USB CDC serial node\n");
-	printf("\t-I | --camid: camera index ID, default 0\n");
-	printf("\t-w | --width: video width, default 1920\n");
-	printf("\t-h | --height: video height, default 1080\n");
-	printf("\t-e | --encode: codec type, default: h265cbr (values: h265cbr, h265vbr, h264cbr, h264vbr)\n");
-	printf("\t-b | --bitrate: bitrate in kbps, default 2048 (2.0 Mbps)\n");
-	printf("\t-l | --loop_count: frame loop count limit (-1 for infinite)\n");
-}
-
-/******************************************************************************
- * function : VENC stream retrieval & USB CDC output thread
- ******************************************************************************/
-static void *venc_get_stream(void *pArgs) {
-	SAMPLE_VENC_CTX_S *ctx = (SAMPLE_VENC_CTX_S *)(pArgs);
-	RK_S32 s32Ret = RK_FAILURE;
-	void *pData = RK_NULL;
-	RK_S32 loopCount = 0;
-
-	// Open USB CDC serial device node in Non-Blocking Mode
-	const char *cdc_dev = ctx->dstFilePath ? ctx->dstFilePath : "/dev/ttyGS0";
-	int cdc_fd = open(cdc_dev, O_WRONLY | O_NONBLOCK | O_NOCTTY);
-
-	if (cdc_fd < 0) {
-		// Fallback check to /dev/ttyGS0 if specified device failed
-		cdc_dev = "/dev/ttyGS0";
-		cdc_fd = open(cdc_dev, O_WRONLY | O_NONBLOCK | O_NOCTTY);
-	}
-
-	if (cdc_fd < 0) {
-		printf("ERROR: Failed to open USB CDC device node (/dev/ttyGS0 or /dev/ttyGS0): %s\n", strerror(errno));
+/* ----------------------------------------------------------------------------
+ * USB CDC Video Streaming Thread
+ * ---------------------------------------------------------------------------- */
+static void *venc_cdc_stream_thread(void *arg) {
+	(void)arg;
+	VENC_STREAM_S stFrame;
+	stFrame.pstPack = malloc(sizeof(VENC_PACK_S));
+	if (!stFrame.pstPack) {
+		RK_LOGE("Failed to allocate VENC_PACK_S memory");
 		quit = true;
-		return RK_NULL;
+		return NULL;
 	}
 
-	printf("\n=======================================================\n");
-	printf("SUCCESS: Streaming H.265 to USB CDC port: %s\n", cdc_dev);
-	printf("=======================================================\n\n");
+	int cdc_fd = open(VTX_CDC_DEV, O_WRONLY | O_NONBLOCK | O_NOCTTY);
+	if (cdc_fd < 0) {
+		fprintf(stderr, "ERROR: Could not open %s (%s). Check USB connection.\n",
+		        VTX_CDC_DEV, strerror(errno));
+		quit = true;
+		free(stFrame.pstPack);
+		return NULL;
+	}
+
+	printf("\n>>> VTX STREAMING ACTIVE: Outputting H.265 to %s <<<\n\n", VTX_CDC_DEV);
 
 	while (!quit) {
-		s32Ret = SAMPLE_COMM_VENC_GetStream(ctx, &pData);
+		/* Direct blocking wait (200ms timeout) */
+		RK_S32 s32Ret = RK_MPI_VENC_GetStream(0, &stFrame, 200);
 		if (s32Ret == RK_SUCCESS) {
-			if (ctx->s32loopCount > 0 && loopCount >= ctx->s32loopCount) {
-				SAMPLE_COMM_VENC_ReleaseStream(ctx);
-				quit = true;
-				break;
-			}
-
-			// Extract NAL unit pointer and length
-			uint8_t *packet_buf = (uint8_t *)(pData) + ctx->stFrame.pstPack->u32Offset;
-			uint32_t packet_len = ctx->stFrame.pstPack->u32Len - ctx->stFrame.pstPack->u32Offset;
+			void *pData = RK_MPI_MB_Handle2VirAddr(stFrame.pstPack->pMbBlk);
+			uint8_t *packet_buf = (uint8_t *)pData + stFrame.pstPack->u32Offset;
+			uint32_t packet_len = stFrame.pstPack->u32Len - stFrame.pstPack->u32Offset;
 
 			if (packet_buf && packet_len > 0) {
-				// Stream raw H.265 NAL unit out USB CDC
 				ssize_t written = write(cdc_fd, packet_buf, packet_len);
-
-				if (written < 0) {
-					if (errno == EAGAIN || errno == EWOULDBLOCK) {
-						// USB buffer full: Drop packet to maintain 0 latency
-						RK_LOGD("USB CDC buffer full, frame dropped\n");
-					} else {
-						printf("USB CDC write error: %s\n", strerror(errno));
-					}
+				if (written < 0 && (errno != EAGAIN && errno != EWOULDBLOCK)) {
+					RK_LOGD("USB CDC write issue: %s", strerror(errno));
 				}
 			}
-
-			SAMPLE_COMM_VENC_ReleaseStream(ctx);
-			loopCount++;
+			RK_MPI_VENC_ReleaseStream(0, &stFrame);
 		}
-		usleep(100); // sleep to yield CPU
 	}
 
 	if (cdc_fd >= 0) {
@@ -157,311 +94,175 @@ static void *venc_get_stream(void *pArgs) {
 		printf("Closed USB CDC device node\n");
 	}
 
-	return RK_NULL;
+	free(stFrame.pstPack);
+	return NULL;
 }
 
-/******************************************************************************
- * function : main()
- * Description : Camera VI -> VPSS -> VENC H.265 -> USB CDC
- ******************************************************************************/
+/* ----------------------------------------------------------------------------
+ * VI / VENC / ISP Hardware Configuration
+ * ---------------------------------------------------------------------------- */
+static int vi_init(int channelId, int width, int height) {
+	VI_DEV_ATTR_S stDevAttr;
+	VI_DEV_BIND_PIPE_S stBindPipe;
+	memset(&stDevAttr, 0, sizeof(stDevAttr));
+	memset(&stBindPipe, 0, sizeof(stBindPipe));
+
+	RK_MPI_VI_GetDevAttr(0, &stDevAttr);
+	RK_MPI_VI_SetDevAttr(0, &stDevAttr);
+	RK_MPI_VI_EnableDev(0);
+
+	stBindPipe.u32Num = 1;
+	stBindPipe.PipeId[0] = 0;
+	RK_MPI_VI_SetDevBindPipe(0, &stBindPipe);
+
+	VI_CHN_ATTR_S vi_chn_attr;
+	memset(&vi_chn_attr, 0, sizeof(vi_chn_attr));
+	vi_chn_attr.stIspOpt.u32BufCount = 2;
+	vi_chn_attr.stIspOpt.enMemoryType = VI_V4L2_MEMORY_TYPE_DMABUF;
+	vi_chn_attr.stSize.u32Width = width;   /* 1280 (Downscaled by ISP) */
+	vi_chn_attr.stSize.u32Height = height; /* 720 */
+	vi_chn_attr.enPixelFormat = RK_FMT_YUV420SP;
+	vi_chn_attr.enCompressMode = COMPRESS_MODE_NONE;
+	vi_chn_attr.u32Depth = 0;
+
+	/* Fixed 60 FPS */
+	vi_chn_attr.stFrameRate.s32SrcFrameRate = VTX_FPS;
+	vi_chn_attr.stFrameRate.s32DstFrameRate = VTX_FPS;
+
+	RK_S32 ret = RK_MPI_VI_SetChnAttr(0, channelId, &vi_chn_attr);
+	ret |= RK_MPI_VI_EnableChn(0, channelId);
+	return ret;
+}
+
+static int venc_init(int chnId, int width, int height) {
+	VENC_RECV_PIC_PARAM_S stRecvParam;
+	VENC_CHN_ATTR_S stAttr;
+	memset(&stAttr, 0, sizeof(VENC_CHN_ATTR_S));
+
+	/* H.265 CBR Rate Control */
+	stAttr.stRcAttr.enRcMode = VENC_RC_MODE_H265CBR;
+	stAttr.stRcAttr.stH265Cbr.u32BitRate = VTX_BITRATE_KBPS;
+	stAttr.stRcAttr.stH265Cbr.u32Gop = VTX_FPS;
+	stAttr.stRcAttr.stH265Cbr.u32SrcFrameRateNum = VTX_FPS;
+	stAttr.stRcAttr.stH265Cbr.u32SrcFrameRateDen = 1;
+	stAttr.stRcAttr.stH265Cbr.fr32DstFrameRateNum = VTX_FPS;
+	stAttr.stRcAttr.stH265Cbr.fr32DstFrameRateDen = 1;
+
+	stAttr.stVencAttr.enType = RK_VIDEO_ID_HEVC;
+	stAttr.stVencAttr.enPixelFormat = RK_FMT_YUV420SP;
+	stAttr.stVencAttr.u32Profile = H265E_PROFILE_MAIN;
+	stAttr.stVencAttr.u32PicWidth = width;
+	stAttr.stVencAttr.u32PicHeight = height;
+	stAttr.stVencAttr.u32VirWidth = width;
+	stAttr.stVencAttr.u32VirHeight = height;
+	stAttr.stVencAttr.u32StreamBufCnt = 2; /* Low latency buffer pool */
+	stAttr.stVencAttr.u32BufSize = width * height * 3 / 2;
+	stAttr.stVencAttr.enMirror = MIRROR_NONE;
+
+	RK_MPI_VENC_CreateChn(chnId, &stAttr);
+
+	/* 1. Motion Deblur: Keeps edges sharp during high-speed drone turns */
+	RK_MPI_VENC_EnableMotionDeblur(chnId, RK_TRUE);
+
+	/* 2. Flat Scaling List: Reduces DCT latency & decoding complexity */
+	VENC_H265_TRANS_S pstH265Trans;
+	RK_MPI_VENC_GetH265Trans(chnId, &pstH265Trans);
+	pstH265Trans.bScalingListEnabled = 0;
+	RK_MPI_VENC_SetH265Trans(chnId, &pstH265Trans);
+
+	/* 3. Gradual Intra Refresh (GIR): Flat bit distribution across frames */
+	VENC_INTRA_REFRESH_S stIntraRefresh;
+	memset(&stIntraRefresh, 0, sizeof(VENC_INTRA_REFRESH_S));
+	stIntraRefresh.bRefreshEnable = RK_TRUE;
+	stIntraRefresh.enIntraRefreshMode = INTRA_REFRESH_ROW;
+	stIntraRefresh.u32RefreshNum = height / VTX_FPS; /* 12 rows per frame */
+	stIntraRefresh.u32ReqIQp = 25;
+	RK_MPI_VENC_SetIntraRefresh(chnId, &stIntraRefresh);
+
+	/* 4. Strict QP Smoothing: Prevents sudden pixelation when panning */
+	VENC_RC_PARAM_S stRcParam;
+	memset(&stRcParam, 0, sizeof(VENC_RC_PARAM_S));
+	stRcParam.s32FirstFrameStartQp = 26;
+	stRcParam.stParamH265.u32StepQp = 3;
+	stRcParam.stParamH265.u32MinQp = 18;
+	stRcParam.stParamH265.u32MaxQp = 40;
+	stRcParam.stParamH265.u32MinIQp = 18;
+	stRcParam.stParamH265.u32MaxIQp = 36;
+	RK_MPI_VENC_SetRcParam(chnId, &stRcParam);
+
+	memset(&stRecvParam, 0, sizeof(VENC_RECV_PIC_PARAM_S));
+	stRecvParam.s32RecvPicNum = -1;
+	RK_MPI_VENC_StartRecvFrame(chnId, &stRecvParam);
+
+	return 0;
+}
+
+/* ----------------------------------------------------------------------------
+ * Main Entry Point
+ * ---------------------------------------------------------------------------- */
 int main(int argc, char *argv[]) {
-	SAMPLE_MPI_CTX_S *ctx;
-	int video_width = 1920;
-	int video_height = 1080;
-	int venc_width = 1280;
-	int venc_height = 720;
-	//int disp_width = 1080;
-	//int disp_height = 1920;
-	//RK_CHAR *pDeviceName = NULL;
-	RK_CHAR *pInPathBmp = NULL;
-	RK_CHAR *pOutCdcDev = "/dev/ttyGS0";
-	
-	// Default to H.265 CBR at 2.0 Mbps
-	CODEC_TYPE_E enCodecType = RK_CODEC_TYPE_H265;
-	VENC_RC_MODE_E enRcMode = VENC_RC_MODE_H265CBR;
-    RK_CHAR *pCodecName = "H265CBR";
-	
-	RK_S32 s32CamId = 0;
-	RK_S32 s32DisId = -1;
-	//RK_S32 s32DisLayerId = 0;
-	RK_S32 s32loopCnt = -1;
-	RK_S32 s32BitRate = 2 * 1024; // 2048 kbps = 2.0 Mbps
-	MPP_CHN_S stSrcChn, stDestChn;
+	(void)argc;
+	(void)argv;
 
-	// Target FPS
-    int target_fps = 60;
-	
-	ctx = (SAMPLE_MPI_CTX_S *)(malloc(sizeof(SAMPLE_MPI_CTX_S)));
-	memset(ctx, 0, sizeof(SAMPLE_MPI_CTX_S));
-
-	// Catch SIGINT and SIGTERM for graceful exit
 	signal(SIGINT, sigterm_handler);
 	signal(SIGTERM, sigterm_handler);
 
-#ifdef RKAIQ
-	RK_BOOL bMultictx = RK_FALSE;
-#endif
-	int c;
-	char *iq_file_dir = NULL;
-	while ((c = getopt_long(argc, argv, optstr, long_options, NULL)) != -1) {
-		const char *tmp_optarg = optarg;
-		switch (c) {
-		case 'a':
-			if (!optarg && NULL != argv[optind] && '-' != argv[optind][0]) {
-				tmp_optarg = argv[optind++];
-			}
-			if (tmp_optarg) {
-				iq_file_dir = (char *)tmp_optarg;
-			} else {
-				iq_file_dir = NULL;
-			}
-			break;
-		case 'b':
-			s32BitRate = atoi(optarg);
-			break;
-		case 'd':
-			pOutCdcDev = optarg;
-			break;
-		case 'D':
-			s32DisId = atoi(optarg);
-			break;
-		case 'e':
-			if (!strcmp(optarg, "h265cbr")) {
-				enCodecType = RK_CODEC_TYPE_H265;
-				enRcMode = VENC_RC_MODE_H265CBR;
-				pCodecName = "H265CBR";
-			} else if (!strcmp(optarg, "h265vbr")) {
-				enCodecType = RK_CODEC_TYPE_H265;
-				enRcMode = VENC_RC_MODE_H265VBR;
-				pCodecName = "H265VBR";
-			} else if (!strcmp(optarg, "h264cbr")) {
-				enCodecType = RK_CODEC_TYPE_H264;
-				enRcMode = VENC_RC_MODE_H264CBR;
-				pCodecName = "H264CBR";
-			} else if (!strcmp(optarg, "h264vbr")) {
-				enCodecType = RK_CODEC_TYPE_H264;
-				enRcMode = VENC_RC_MODE_H264VBR;
-				pCodecName = "H264VBR";
-			} else {
-				printf("ERROR: Invalid encoder type specified: %s\n", optarg);
-				return 0;
-			}
-			break;
-		case 'w':
-			video_width = atoi(optarg);
-			venc_width = video_width;
-			break;
-		case 'h':
-			video_height = atoi(optarg);
-			venc_height = video_height;
-			break;
-		case 'I':
-			s32CamId = atoi(optarg);
-			break;
-		case 'i':
-			pInPathBmp = optarg;
-			break;
-		case 'l':
-			s32loopCnt = atoi(optarg);
-			break;
-		case 'o':
-			pOutCdcDev = optarg;
-			break;
-#ifdef RKAIQ
-		case 'M':
-			if (atoi(optarg)) {
-				bMultictx = RK_TRUE;
-			}
-			break;
-#endif
-		case '?':
-		default:
-			print_usage(argv[0]);
-			return 0;
-		}
-	}
+	printf("\n=======================================================\n");
+	printf(" Luckfox Pico Zero - Dedicated H.265 Low-Latency VTX\n");
+	printf(" Ingest       : Sony IMX462 1080p60 (Full FOV)\n");
+	printf(" Scaler/Output: 1280x720 @ 60 FPS (Hardware ISP)\n");
+	printf(" Video Codec  : H.265 Main Profile\n");
+	printf(" Bitrate      : %u Kbps CBR (Gradual Refresh Active)\n", VTX_BITRATE_KBPS);
+	printf(" Destination  : %s\n", VTX_CDC_DEV);
+	printf("=======================================================\n\n");
 
-	printf("\n--- Luckfox Pico H.265 USB CDC Streamer ---\n");
-	printf("Camera Index : %d\n", s32CamId);
-	printf("Resolution   : %dx%d\n", video_width, video_height);
-	printf("Codec Mode   : %s\n", pCodecName);
-	printf("Target Bitrate: %d kbps\n", s32BitRate);
-	printf("Target USB CDC: %s\n", pOutCdcDev);
-	printf("IQ Directory : %s\n\n", iq_file_dir ? iq_file_dir : "Auto");
-
-	// Initialize RKAIQ ISP
-	if (iq_file_dir) {
-#ifdef RKAIQ
-    rk_aiq_working_mode_t hdr_mode = RK_AIQ_WORKING_MODE_NORMAL;
-    SAMPLE_COMM_ISP_Init(s32CamId, hdr_mode, bMultictx, iq_file_dir);
-    SAMPLE_COMM_ISP_Run(s32CamId);
-
-    //    Force Camera Sensor & ISP Exposure Engine to 60 FPS
-    //    rk_aiq_sys_ctx_t *aiq_ctx = rk_aiq_uapi2_sysctl_get_ctx(s32CamId);
-    //	  if (aiq_ctx) {
-    //    rk_aiq_user_api2_ae_setFixFrameRate(aiq_ctx, 60);
-    //    printf("ISP locked to 60 FPS\n");
-    //}
-#endif
+	/* Initialize RKAIQ ISP unconditionally from /etc/iqfiles */
+	rk_aiq_static_info_t aiq_static_info;
+	rk_aiq_uapi2_sysctl_enumStaticMetas(0, &aiq_static_info);
+	g_aiq_ctx = rk_aiq_uapi2_sysctl_init(aiq_static_info.sensor_info.sensor_name,
+	                                    VTX_IQ_DIR, NULL, NULL);
+	if (g_aiq_ctx) {
+		rk_aiq_uapi2_sysctl_prepare(g_aiq_ctx, 0, 0, RK_AIQ_WORKING_MODE_NORMAL);
+		rk_aiq_uapi2_sysctl_start(g_aiq_ctx);
 	}
 
 	if (RK_MPI_SYS_Init() != RK_SUCCESS) {
-		goto __FAILED;
+		RK_LOGE("RK_MPI_SYS_Init failed");
+		return -1;
 	}
 
-// Init VI[0]
-    ctx->vi.u32Width = video_width;   // 1920
-    ctx->vi.u32Height = video_height; // 1080
-    ctx->vi.s32DevId = s32CamId;
-    ctx->vi.u32PipeId = ctx->vi.s32DevId;
-    ctx->vi.s32ChnId = 1;
-    ctx->vi.stChnAttr.stIspOpt.u32BufCount = 2;
-    ctx->vi.stChnAttr.stIspOpt.enMemoryType = VI_V4L2_MEMORY_TYPE_DMABUF;
-    ctx->vi.stChnAttr.u32Depth = 0;
-    ctx->vi.stChnAttr.enPixelFormat = RK_FMT_YUV420SP;
-    
-    // Set VI Framerate to 60 FPS
-    ctx->vi.stChnAttr.stFrameRate.s32SrcFrameRate = target_fps;
-    ctx->vi.stChnAttr.stFrameRate.s32DstFrameRate = target_fps;
-    
-    SAMPLE_COMM_VI_CreateChn(&ctx->vi);
+	/* Initialize Hardware VI (ISP downscales 1080p -> 720p) & VENC (H.265) */
+	vi_init(0, VTX_WIDTH, VTX_HEIGHT);
+	venc_init(0, VTX_WIDTH, VTX_HEIGHT);
 
-// Init VPSS[0] (Hardware RGA Downscaler)
-    ctx->vpss.s32GrpId = 0;
-    ctx->vpss.s32ChnId = 0;
-    ctx->vpss.enVProcDevType = VIDEO_PROC_DEV_RGA; // Hardware RGA
-    ctx->vpss.stGrpVpssAttr.enPixelFormat = RK_FMT_YUV420SP;
-    ctx->vpss.stGrpVpssAttr.enCompressMode = COMPRESS_MODE_NONE;
+	/* Direct VI[0] -> VENC[0] Binding */
+	MPP_CHN_S stSrcChn = { .enModId = RK_ID_VI,   .s32DevId = 0, .s32ChnId = 0 };
+	MPP_CHN_S stDestChn = { .enModId = RK_ID_VENC, .s32DevId = 0, .s32ChnId = 0 };
+	RK_MPI_SYS_Bind(&stSrcChn, &stDestChn);
 
-    // VPSS Group Input Size (Full 1080p from camera)
-    ctx->vpss.stCropInfo.bEnable = RK_FALSE;
-    ctx->vpss.stCropInfo.stCropRect.u32Width = video_width;   // 1920
-    ctx->vpss.stCropInfo.stCropRect.u32Height = video_height; // 1080
-
-    // VPSS Channel 0 Output Size (Downscaled to 720p)
-    ctx->vpss.stVpssChnAttr[0].enChnMode = VPSS_CHN_MODE_USER;
-    ctx->vpss.stVpssChnAttr[0].enCompressMode = COMPRESS_MODE_NONE;
-    ctx->vpss.stVpssChnAttr[0].enDynamicRange = DYNAMIC_RANGE_SDR8;
-    ctx->vpss.stVpssChnAttr[0].enPixelFormat = RK_FMT_YUV420SP;
-    ctx->vpss.stVpssChnAttr[0].u32Width = venc_width;   // 1280
-    ctx->vpss.stVpssChnAttr[0].u32Height = venc_height; // 720
-    
-    // Set VPSS Framerate to 60 FPS
-    ctx->vpss.stVpssChnAttr[0].stFrameRate.s32SrcFrameRate = target_fps;
-    ctx->vpss.stVpssChnAttr[0].stFrameRate.s32DstFrameRate = target_fps;
-    
-    SAMPLE_COMM_VPSS_CreateChn(&ctx->vpss);
-
-// Init VENC[0] (H.265 Hardware Encoder)
-    ctx->venc.s32ChnId = 0;
-    ctx->venc.u32Width = venc_width;   // 1280
-    ctx->venc.u32Height = venc_height; // 720
-    ctx->venc.u32Fps = target_fps;      // Target FPS
-    ctx->venc.u32Gop = 2 * target_fps;      // (complete) I-Frame distance
-    ctx->venc.u32BitRate = s32BitRate;  // 2000 kbps (2.0 Mbps CBR)
-    ctx->venc.enCodecType = enCodecType;
-    ctx->venc.enRcMode = enRcMode;
-    ctx->venc.getStreamCbFunc = venc_get_stream;
-    ctx->venc.dstFilePath = pOutCdcDev;
-    ctx->venc.stChnAttr.stVencAttr.u32Profile = 0; // H.265 Main Profile
-    ctx->venc.stChnAttr.stGopAttr.enGopMode = VENC_GOPMODE_NORMALP;
-    
-/*
-	ctx->venc.stChnAttr.stRcAttr.stH265Cbr.u32MinQp = 28;
-	ctx->venc.stChnAttr.stRcAttr.stH265Cbr.u32MaxQp = 45;
-	ctx->venc.stChnAttr.stRcAttr.stH265Cbr.u32MinIQp = 28;
-	ctx->venc.stChnAttr.stRcAttr.stH265Cbr.u32MaxIQp = 45;
-*/
-
-
-    SAMPLE_COMM_VENC_CreateChn(&ctx->venc);
-	// Enable Gradual / Periodic Intra Refresh (PIR) for Flat Radio Bitrate
-	VENC_INTRA_REFRESH_S stIntraRefresh;
-	memset(&stIntraRefresh, 0, sizeof(VENC_INTRA_REFRESH_S));
-
-	stIntraRefresh.bRefreshEnable = RK_TRUE;                  // Enable PIR
-	stIntraRefresh.enIntraRefreshMode = INTRA_REFRESH_ROW;    // Refresh row-by-row (or INTRA_REFRESH_COLUMN)
-	stIntraRefresh.u32RefreshNum = venc_height / 60;          // Number of rows refreshed per frame (e.g. 720 / 60 = 12 rows)
-	stIntraRefresh.u32ReqIQp = 28;                            // Intra refresh QP quality 0 to 51 low is higher bitrate
-
-	// Apply to VENC Channel 0
-	RK_S32 s32Ret = RK_MPI_VENC_SetIntraRefresh(ctx->venc.s32ChnId, &stIntraRefresh);
-	if (s32Ret == RK_SUCCESS) {
-		printf("Gradual Intra Refresh (PIR) ENABLED: Packet sizes are now 100%% flat!\n");
-	} else {
-		printf("Warning: Failed to set Intra Refresh (Error: %d)\n", s32Ret);
-	}
-
-	// Bind VI[0] to VPSS[0]
-	stSrcChn.enModId = RK_ID_VI;
-	stSrcChn.s32DevId = ctx->vi.s32DevId;
-	stSrcChn.s32ChnId = ctx->vi.s32ChnId;
-	stDestChn.enModId = RK_ID_VPSS;
-	stDestChn.s32DevId = ctx->vpss.s32GrpId;
-	stDestChn.s32ChnId = ctx->vpss.s32ChnId;
-	SAMPLE_COMM_Bind(&stSrcChn, &stDestChn);
-
-	// Bind VPSS[0] to VENC[0]
-	stSrcChn.enModId = RK_ID_VPSS;
-	stSrcChn.s32DevId = ctx->vpss.s32GrpId;
-	stSrcChn.s32ChnId = ctx->vpss.s32ChnId;
-	stDestChn.enModId = RK_ID_VENC;
-	stDestChn.s32DevId = 0;
-	stDestChn.s32ChnId = ctx->venc.s32ChnId;
-	SAMPLE_COMM_Bind(&stSrcChn, &stDestChn);
-
-	printf("Camera & Hardware Encoder Initialization Finished. Streaming...\n");
+	/* Launch USB CDC Transmission Thread */
+	pthread_t cdc_thread;
+	pthread_create(&cdc_thread, NULL, venc_cdc_stream_thread, NULL);
 
 	while (!quit) {
 		sleep(1);
 	}
 
-	printf("\nShutting down pipeline...\n");
+	pthread_join(cdc_thread, NULL);
 
-	if (ctx->venc.getStreamCbFunc) {
-		pthread_join(ctx->venc.getStreamThread, NULL);
-	}
-
-	// UnBind VPSS[0] and VENC[0]
-	stSrcChn.enModId = RK_ID_VPSS;
-	stSrcChn.s32DevId = ctx->vpss.s32GrpId;
-	stSrcChn.s32ChnId = ctx->vpss.s32ChnId;
-	stDestChn.enModId = RK_ID_VENC;
-	stDestChn.s32DevId = 0;
-	stDestChn.s32ChnId = ctx->venc.s32ChnId;
-	SAMPLE_COMM_UnBind(&stSrcChn, &stDestChn);
-
-	// UnBind VI[0] and VPSS[0]
-	stSrcChn.enModId = RK_ID_VI;
-	stSrcChn.s32DevId = ctx->vi.s32DevId;
-	stSrcChn.s32ChnId = ctx->vi.s32ChnId;
-	stDestChn.enModId = RK_ID_VPSS;
-	stDestChn.s32DevId = ctx->vpss.s32GrpId;
-	stDestChn.s32ChnId = ctx->vpss.s32ChnId;
-	SAMPLE_COMM_UnBind(&stSrcChn, &stDestChn);
-
-	// Destroy VENC, VPSS, and VI channels
-	SAMPLE_COMM_VENC_DestroyChn(&ctx->venc);
-	SAMPLE_COMM_VPSS_DestroyChn(&ctx->vpss);
-	SAMPLE_COMM_VI_DestroyChn(&ctx->vi);
-
-__FAILED:
+	/* Clean Shutdown */
+	RK_MPI_SYS_UnBind(&stSrcChn, &stDestChn);
+	RK_MPI_VI_DisableChn(0, 0);
+	RK_MPI_VENC_StopRecvFrame(0);
+	RK_MPI_VENC_DestroyChn(0);
+	RK_MPI_VI_DisableDev(0);
 	RK_MPI_SYS_Exit();
-	if (iq_file_dir) {
-#ifdef RKAIQ
-		SAMPLE_COMM_ISP_Stop(s32CamId);
-#endif
-	}
-	if (ctx) {
-		free(ctx);
-		ctx = RK_NULL;
+
+	if (g_aiq_ctx) {
+		rk_aiq_uapi2_sysctl_stop(g_aiq_ctx, false);
+		rk_aiq_uapi2_sysctl_deinit(g_aiq_ctx);
 	}
 
+	printf("VTX Pipeline cleanly terminated.\n");
 	return 0;
 }
-
-#ifdef __cplusplus
-#if __cplusplus
-}
-#endif
-#endif /* End of #ifdef __cplusplus */
