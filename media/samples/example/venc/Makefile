@@ -10,6 +10,7 @@ endif
 all:
 	@$(SAMPLE_CC) $(SAMPLE_CFLAGS) sample_vi_vpss_osd_venc.c -o sample_vi_vpss_osd_venc $(LD_FLAGS)
 	@$(SAMPLE_CC) $(SAMPLE_CFLAGS) vtx.c -o vtx $(LD_FLAGS)
+	@$(SAMPLE_CC) $(SAMPLE_CFLAGS) venc_direct_wifi_stream.c -o venc_direct_wifi_stream $(LD_FLAGS)
 ifeq ($(HAVE_AVS), y)
 	@$(SAMPLE_CC) $(SAMPLE_CFLAGS) sample_multi_vi_avs_osd_venc.c -o sample_multi_vi_avs_osd_venc $(LD_FLAGS)
 endif
@@ -17,10 +18,11 @@ endif
 install:
 	@mv -f sample_vi_vpss_osd_venc $(SAMPLE_OUT_DIR)/bin
 	@mv -f vtx $(SAMPLE_OUT_DIR)/bin
+	@mv -f venc_direct_wifi_stream $(SAMPLE_OUT_DIR)/bin
 ifeq ($(HAVE_AVS), y)
 	@mv -f sample_multi_vi_avs_osd_venc $(SAMPLE_OUT_DIR)/bin
 endif
 
 clean:
 	@echo "clean venc"
-	@rm -f sample_vi_vpss_osd_venc vtx sample_multi_vi_avs_osd_venc
+	@rm -f sample_vi_vpss_osd_venc vtx venc_direct_wifi_stream sample_multi_vi_avs_osd_venc

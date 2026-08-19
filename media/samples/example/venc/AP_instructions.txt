@@ -1,0 +1,40 @@
+# 1. Stop existing networking daemons
+killall -9 wpa_supplicant udhcpc hostapd dnsmasq udhcpd 2>/dev/null
+
+# 2. (Optional) Switch to onboard ceramic antenna if not using external antenna
+echo 123 > /sys/class/gpio/export 2>/dev/null
+echo out > /sys/class/gpio/gpio123/direction 2>/dev/null
+echo 1 > /sys/class/gpio/gpio123/value 2>/dev/null
+
+# 3. Configure static IP on wlan0
+ifconfig wlan0 down
+ifconfig wlan0 192.168.4.1 netmask 255.255.255.0 up
+
+# 4. Create hostapd config in RAM (/tmp)
+cat << 'EOF' > /tmp/hostapd.conf
+interface=wlan0
+driver=nl80211
+ssid=Luckfox_VTX
+hw_mode=g
+channel=6
+ieee80211n=1
+wmm_enabled=1
+macaddr_acl=0
+auth_algs=1
+ignore_broadcast_ssid=0
+wpa=2
+wpa_passphrase=luckfox1234
+wpa_key_mgmt=WPA-PSK
+rsn_pairwise=CCMP
+EOF
+
+# 5. Start dnsmasq DHCP server (hands out 192.168.4.10 - 192.168.4.50)
+dnsmasq \
+  --interface=wlan0 \
+  --dhcp-range=192.168.4.10,192.168.4.50,255.255.255.0,12h \
+  --dhcp-option=3,192.168.4.1 \
+  --dhcp-option=6,192.168.4.1 \
+  --no-daemon &
+
+# 6. Start hostapd in the background
+hostapd -B /tmp/hostapd.conf
